@@ -89,7 +89,7 @@ mod tests {
     }
 
     #[test]
-    fn contract_version_is_v0_4_0() {
+    fn contract_version_is_v0_4_1() {
         assert_eq!(CONTRACT_VERSION, "0.4.1");
     }
 }

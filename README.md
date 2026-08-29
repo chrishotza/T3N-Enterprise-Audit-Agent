@@ -18,8 +18,9 @@ Privacy guarantee: the `book-offer` input never accepts passenger PII. The
 contract places profile placeholders in the Duffel payload, and the T3N host
 resolves the approved user-profile values at dispatch time. Plaintext profile
 data therefore never enters the WASM contract or crosses the WIT boundary.
-Only the booking ID, PNR, and status return to the caller. Upstream error
-bodies remain in enclave logs and are never returned to the caller.
+Only the booking ID, PNR, and status return to the caller. Booking-error logs
+retain only the HTTP status; upstream response bodies are neither returned nor
+logged.
 
 ## Host-capability manifest
 

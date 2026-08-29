@@ -107,11 +107,9 @@ fn book_offer_wasm(req: BookOfferReq) -> Result<Booking, String> {
     .map_err(|e| alloc::format!("duffel create-order: {}", format_http_error(e)))?;
 
     if resp.code != 200 && resp.code != 201 {
-        let _ = logging::error(&alloc::format!(
-            "Duffel create-order HTTP {}: {}",
-            resp.code,
-            alloc::string::String::from_utf8_lossy(&resp.payload)
-        ));
+        // Do not log the upstream response body: booking errors may include
+        // passenger data even though that data is never returned to callers.
+        let _ = logging::error(&alloc::format!("Duffel create-order HTTP {}", resp.code));
         return Err(alloc::format!(
             "Duffel create-order failed: HTTP {}",
             resp.code
