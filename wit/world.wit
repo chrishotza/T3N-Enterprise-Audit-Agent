@@ -1,0 +1,55 @@
+/// z-tenant-flight WIT world — Duffel flight booking showcase.
+///
+/// Imports required host capabilities:
+///   - tenant-context:        tenant DID, cluster timestamp
+///   - logging:               debug / info / error lines
+///   - kv-store:              reads the `secrets` map for the Duffel API key
+///   - http:                  Duffel offer SEARCH (carries no PII)
+///   - http-with-placeholders: Duffel order BOOKING — the body carries
+///                            `{{profile.<field>}}` markers the host resolves
+///                            from the calling user's profile at dispatch time,
+///                            so passenger PII never enters WASM memory.
+///
+/// Note: http requires the `Http` HostCapability and http-with-placeholders
+/// requires the `HttpWithPlaceholders` HostCapability, both granted at admit
+/// time. The Duffel API key is stored in the z: KV map `z:<tid>:secrets` under
+/// the key `duffel_api_key`. The contract builds the full map name at runtime
+/// using `tenant-context.tenant-did()`. The map is created and populated by the
+/// tenant SDK before the contract runs — no secret interface is needed.
+package z:tenant-flight@0.4.0;
+
+world tenant-flight {
+    import host:tenant/tenant-context@1.0.0;
+    import host:interfaces/logging@2.1.0;
+    import host:interfaces/kv-store@2.1.0;
+    import host:interfaces/http@2.1.0;                    // search (no PII)
+    import host:interfaces/http-with-placeholders@2.1.0;  // booking (PII via placeholders)
+
+    export contracts;
+}
+
+interface contracts {
+    /// Standard 3-field envelope used by all contracts callable from the node.
+    /// `input`        — JSON-serialized request payload specific to the function.
+    /// `user-profile` — always None for tenant contracts (hardcoded at dispatch).
+    /// `context`      — JSON-serialized DynamicContext (node-minted, trusted).
+    record generic-input {
+        input:        option<list<u8>>,
+        user-profile: option<list<u8>>,
+        context:      option<list<u8>>,
+    }
+
+    /// Search Duffel for available flights and return a list of offers.
+    /// Input  (JSON): { origin, destination, departure_date, cabin_class, adult_count }
+    /// Output (JSON): { offers: [{ id, total_amount, total_currency, expires_at }] }
+    search-offers: func(req: generic-input) -> result<list<u8>, string>;
+
+    /// Book the selected offer. Returns booking ID and PNR.
+    /// Input  (JSON): { offer_id, passenger_id, total_amount, total_currency }
+    /// Carries NO passenger PII: the contract templates `{{profile.<field>}}`
+    /// markers into the Duffel order body and the host resolves them from the
+    /// calling user's profile via http-with-placeholders. `passenger_id` is the
+    /// opaque Duffel-assigned id from search-offers (not PII).
+    /// Output (JSON): { id, pnr, status }
+    book-offer: func(req: generic-input) -> result<list<u8>, string>;
+}
