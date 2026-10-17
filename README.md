@@ -1,5 +1,9 @@
 # z-tenant-flight
 
+> **Repository identity / Identidad del repositorio:** Although the repository URL is `T3N-Enterprise-Audit-Agent`, the checked-in artifact is **`z-tenant-flight`**, a Rust/WASM Duffel flight-search and booking contract for Terminal 3 Network tenants. This is **not** a general-purpose enterprise audit agent.
+>
+> **ES:** Aunque el repositorio conserva el nombre `T3N-Enterprise-Audit-Agent`, su implementación actual es un contrato Rust/WASM de búsqueda y reserva de vuelos con protección de datos personales, no un agente genérico de auditoría empresarial.
+
 PII-safe Duffel flight-booking contract for Terminal 3 Network z-namespace
 tenants — v0.4.1.
 
