@@ -7,6 +7,7 @@
 //! so plaintext PII never enters WASM memory.
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BookOfferReq {
     pub offer_id: String,
     /// Opaque Duffel-assigned passenger id from the offer (returned by
@@ -220,6 +221,7 @@ mod tests {
     fn book_offer_rejects_inline_pii_fields() {
         let input = serde_json::to_vec(&serde_json::json!({
             "offer_id": "off_abc123",
+            "passenger_id": "pas_abc123",
             "passengers": [{ "given_name": "Jane" }],
             "total_amount": "199.00",
             "total_currency": "GBP",
@@ -229,4 +231,19 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("bad input"));
     }
+    #[test]
+    fn book_offer_rejects_unexpected_fields() {
+        let input = serde_json::to_vec(&serde_json::json!({
+            "offer_id": "off_abc123",
+            "passenger_id": "pas_abc123",
+            "total_amount": "199.00",
+            "total_currency": "GBP",
+            "unexpected": true,
+        }))
+        .unwrap();
+        let result = book_offer(&input);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("bad input"));
+    }
+
 }
