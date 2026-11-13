@@ -27,11 +27,48 @@ pub struct Booking {
 const DUFFEL_BASE: &str = "https://api.duffel.com";
 const DUFFEL_VERSION: &str = "v2";
 
+/// Fail closed on untrusted booking payloads before accessing secrets or
+/// issuing an order request. This cannot replace user payment confirmation.
+fn validate_booking_request(req: &BookOfferReq) -> Result<(), String> {
+    fn valid_id(value: &str, prefix: &str) -> bool {
+        value.starts_with(prefix) && value.len() > prefix.len() && value.len() <= 128
+            && value[prefix.len()..].bytes().all(|b|
+                b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    }
+    if !valid_id(&req.offer_id, "off_") || !valid_id(&req.passenger_id, "pas_") {
+        return Err("book-offer: expected bounded Duffel offer and passenger IDs".to_string());
+    }
+    if req.total_currency.len() != 3 ||
+        !req.total_currency.bytes().all(|b| b.is_ascii_uppercase()) {
+        return Err("book-offer: currency must be 3 uppercase ASCII letters".to_string());
+    }
+    // Duffel formats differ by currency: accept whole units or 1-2 decimals,
+    // rejecting signs, exponent syntax, leading zeros and unbounded numbers.
+    let (whole, fractional) = match req.total_amount.split_once('.') {
+        Some((w, f)) if (1..=2).contains(&f.len()) &&
+            f.bytes().all(|b| b.is_ascii_digit()) => (w, f),
+        Some(_) => return Err("book-offer: invalid decimal amount".to_string()),
+        None => (req.total_amount.as_str(), ""),
+    };
+    if whole.is_empty() || whole.len() > 9
+        || (whole.len() > 1 && whole.starts_with('0'))
+        || !whole.bytes().all(|b| b.is_ascii_digit())
+        || !whole.bytes().chain(fractional.bytes()).any(|b| b != b'0') {
+        return Err("book-offer: amount must be positive, bounded decimal text".to_string());
+    }
+    Ok(())
+}
+
+
 /// Entry point called from `lib.rs`. `input` is the raw JSON bytes from the
 /// node's `generic-input.input` field.
 pub fn book_offer(input: &[u8]) -> Result<Vec<u8>, String> {
+    if input.len() > 2048 {
+        return Err("book-offer: input exceeds 2048 bytes".to_string());
+    }
     let req: BookOfferReq =
         serde_json::from_slice(input).map_err(|e| alloc::format!("book-offer: bad input: {e}"))?;
+    validate_booking_request(&req)?;
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -231,6 +268,51 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("bad input"));
     }
+
+    #[test]
+    fn book_offer_rejects_unsafe_payment_inputs_before_host_calls() {
+        let valid = serde_json::json!({
+            "offer_id": "off_abc123", "passenger_id": "pas_abc123",
+            "total_amount": "199.00", "total_currency": "GBP"
+        });
+        for (field, invalid) in [
+            ("offer_id", serde_json::json!("off_")),
+            ("offer_id", serde_json::json!("off_abc/def")),
+            ("offer_id", serde_json::json!("off_abc\\nInjected")),
+            ("passenger_id", serde_json::json!("pas_")),
+            ("passenger_id", serde_json::json!("pas_abc_☃")),
+            ("total_amount", serde_json::json!("-1.00")),
+            ("total_amount", serde_json::json!("0")),
+            ("total_amount", serde_json::json!("0.00")),
+            ("total_amount", serde_json::json!("1e9")),
+            ("total_amount", serde_json::json!("9999999999")),
+            ("total_amount", serde_json::json!("001.00")),
+            ("total_amount", serde_json::json!("1.234")),
+            ("total_amount", serde_json::json!("NaN")),
+            ("total_currency", serde_json::json!("gbp")),
+            ("total_currency", serde_json::json!("GBPX")),
+            ("total_currency", serde_json::json!("€UR")),
+        ] {
+            let mut input = valid.clone();
+            input[field] = invalid;
+            let err = book_offer(&serde_json::to_vec(&input).unwrap()).unwrap_err();
+            assert!(err.starts_with("book-offer:"), "{field}: {err}");
+            assert!(!err.contains("only implemented on the wasm32 target"), "{field}: {err}");
+        }
+        for good in ["1", "1.5", "199.00", "0.01", "999999999.99"] {
+            let mut input = valid.clone();
+            input["total_amount"] = serde_json::json!(good);
+            let err = book_offer(&serde_json::to_vec(&input).unwrap()).unwrap_err();
+            assert!(err.contains("only implemented on the wasm32 target"), "{good}: {err}");
+        }
+    }
+
+    #[test]
+    fn book_offer_rejects_oversized_payload_before_json_parsing() {
+        let err = book_offer(&vec![b'x'; 2049]).unwrap_err();
+        assert!(err.contains("exceeds 2048 bytes"), "{err}");
+    }
+
     #[test]
     fn book_offer_rejects_unexpected_fields() {
         let input = serde_json::to_vec(&serde_json::json!({
