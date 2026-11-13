@@ -127,6 +127,18 @@ Input:
 }
 ```
 
+### Booking input safety
+
+Unlike an offer search, `book-offer` can create a paid order through Duffel.
+The contract now rejects requests larger than **2048 bytes** and checks
+`off_`/`pas_`-prefixed, bounded ASCII identifiers; a three-letter uppercase
+currency code; and a **positive, bounded decimal-string** amount (whole units
+or one/two fractional digits). Extra fields, including inline passenger PII,
+remain disallowed. These are *syntactic* checks: they do **not** verify the
+offer/amount/currency against fresh Duffel data and do not replace explicit
+user authorization, payment constraints or a production booking review.
+Native tests never call Duffel or make purchases.
+
 `passenger_id` is an opaque Duffel passenger identifier returned by
 `search-offers`; it is not PII. Passenger details are resolved by the host
 from the caller's approved profile. Returns
