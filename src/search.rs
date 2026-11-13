@@ -5,6 +5,7 @@
 //!   2. GET /air/offers?offer_request_id=<id> → returns offer list
 
 #[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SearchOffersReq {
     pub origin: String,
     pub destination: String,
@@ -31,11 +32,66 @@ pub struct SearchOffersResp {
 const DUFFEL_BASE: &str = "https://api.duffel.com";
 const DUFFEL_VERSION: &str = "v2";
 
+/// Fail closed on malformed or oversized untrusted search requests before
+/// allocating a passenger array or accessing any tenant secrets.
+fn validate_search_request(req: &SearchOffersReq) -> Result<(), String> {
+    if !(1..=9).contains(&req.adult_count) {
+        return Err("search-offers: adult_count must be between 1 and 9".to_string());
+    }
+    let valid_iata = |s: &str| s.len() == 3 && s.bytes().all(|c| c.is_ascii_uppercase());
+    if !valid_iata(&req.origin) || !valid_iata(&req.destination) || req.origin == req.destination {
+        return Err("search-offers: distinct 3-letter uppercase origin/destination required".to_string());
+    }
+    if !matches!(
+        req.cabin_class.as_str(),
+        "economy" | "premium_economy" | "business" | "first"
+    ) {
+        return Err("search-offers: unsupported cabin_class".to_string());
+    }
+    if !is_calendar_date(&req.departure_date) {
+        return Err("search-offers: departure_date must be a real YYYY-MM-DD date".to_string());
+    }
+    Ok(())
+}
+
+fn is_calendar_date(value: &str) -> bool {
+    let b = value.as_bytes();
+    if b.len() != 10 || b[4] != b'-' || b[7] != b'-'
+        || !b.iter().enumerate().all(|(i, c)| i == 4 || i == 7 || c.is_ascii_digit())
+    {
+        return false;
+    }
+    let year: u32 = match value[0..4].parse() {
+        Ok(n) if n > 0 => n,
+        _ => return false,
+    };
+    let month: u32 = match value[5..7].parse() {
+        Ok(n @ 1..=12) => n,
+        _ => return false,
+    };
+    let day: u32 = match value[8..10].parse() {
+        Ok(n) => n,
+        _ => return false,
+    };
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let max_day = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    (1..=max_day).contains(&day)
+}
+
 /// Entry point called from `lib.rs`. `input` is the raw JSON bytes from the
 /// node's `generic-input.input` field.
 pub fn search_offers(input: &[u8]) -> Result<Vec<u8>, String> {
+    if input.len() > 2048 {
+        return Err("search-offers: input exceeds 2048 bytes".to_string());
+    }
     let req: SearchOffersReq = serde_json::from_slice(input)
         .map_err(|e| alloc::format!("search-offers: bad input: {e}"))?;
+    validate_search_request(&req)?;
 
     #[cfg(target_arch = "wasm32")]
     {
@@ -237,4 +293,65 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("bad input"));
     }
+    #[test]
+    fn search_offers_rejects_invalid_passenger_counts_before_host_call() {
+        for count in [0_u32, 10, u32::MAX] {
+            let input = serde_json::json!({
+                "origin": "LHR", "destination": "JFK",
+                "departure_date": "2026-12-15", "cabin_class": "economy",
+                "adult_count": count
+            });
+            let err = search_offers(&serde_json::to_vec(&input).unwrap()).unwrap_err();
+            assert!(err.contains("adult_count must be"), "{err}");
+        }
+    }
+
+    #[test]
+    fn search_offers_rejects_unsafe_route_date_and_cabin() {
+        let valid = serde_json::json!({
+            "origin": "LHR", "destination": "JFK",
+            "departure_date": "2026-12-15", "cabin_class": "economy",
+            "adult_count": 2
+        });
+        for (key, invalid) in [
+            ("origin", serde_json::json!("LH")),
+            ("destination", serde_json::json!("LHR")),
+            ("departure_date", serde_json::json!("2026-02-30")),
+            ("departure_date", serde_json::json!("2026-13-01")),
+            ("departure_date", serde_json::json!("2026-2-03")),
+            ("cabin_class", serde_json::json!("unknown")),
+        ] {
+            let mut request = valid.clone();
+            request[key] = invalid;
+            let err = search_offers(&serde_json::to_vec(&request).unwrap()).unwrap_err();
+            assert!(err.contains("search-offers:"), "{key}: {err}");
+            assert!(!err.contains("only implemented on the wasm32 target"), "{key}: {err}");
+        }
+    }
+
+    #[test]
+    fn search_offers_rejects_unexpected_pii_and_oversized_input() {
+        let mut request = serde_json::json!({
+            "origin": "LHR", "destination": "JFK",
+            "departure_date": "2026-12-15", "cabin_class": "economy",
+            "adult_count": 1
+        });
+        request["passenger_name"] = serde_json::json!("TEST-SYNTHETIC");
+        assert!(search_offers(&serde_json::to_vec(&request).unwrap())
+            .unwrap_err().contains("bad input"));
+        assert!(search_offers(&vec![b'X'; 2049])
+            .unwrap_err().contains("exceeds 2048"));
+    }
+
+    #[test]
+    fn search_date_accepts_real_leap_day_and_rejects_invalid_leap_day() {
+        assert!(is_calendar_date("2028-02-29"));
+        assert!(is_calendar_date("2000-02-29"));
+        assert!(!is_calendar_date("2100-02-29"));
+        assert!(!is_calendar_date("2026-02-29"));
+        assert!(!is_calendar_date("2026-01-00"));
+        assert!(!is_calendar_date("2026-04-31"));
+        assert!(!is_calendar_date("2026-01-0€"));
+    }
+
 }

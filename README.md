@@ -96,6 +96,20 @@ Input:
 
 Returns a list of `offer` records, each with `id`, `total_amount`, `total_currency`, and `expires_at`.
 
+### Search request safety limits
+
+`search-offers` is an intentionally bounded demo contract. It fails closed
+before accessing tenant secrets or issuing a Duffel request unless the input
+meets all of these requirements: **at most 2048 bytes**, exactly the five
+documented fields (no inline passenger details), an integer `adult_count`
+between **1 and 9**, distinct uppercase three-letter IATA city/airport codes,
+a valid calendar date in `YYYY-MM-DD` format, and cabin class `economy`,
+`premium_economy`, `business`, or `first`.
+
+These restrictions are application-side safety constraints, not a claim that
+Duffel accepts every value. Native unit tests check rejection behavior but do
+not test the external Duffel API or authorize live search/booking.
+
 ### `book-offer`
 
 ```wit
